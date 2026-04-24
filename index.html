@@ -1004,6 +1004,58 @@ input,textarea{font:inherit}
 }
 
 /* ============================================================
+   DATA PANEL (progress export/import)
+   ============================================================ */
+.data-panel{
+  display:grid;
+  grid-template-columns:1.5fr 1fr;
+  gap:2px;
+  background:var(--line-strong);
+  border:1px solid var(--line-strong);
+  margin-bottom:48px;
+}
+.data-info,
+.data-actions{
+  background:var(--paper);
+  padding:28px 32px;
+}
+.data-actions{
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+  justify-content:center;
+}
+.data-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:baseline;
+  padding:10px 0;
+  border-bottom:1px dashed var(--line);
+}
+.data-row:last-of-type{border-bottom:none}
+.data-label{
+  font-family:var(--mono);
+  font-size:10px;
+  letter-spacing:.22em;
+  text-transform:uppercase;
+  color:var(--muted);
+}
+.data-value{
+  font-family:var(--display);
+  font-size:22px;
+  color:var(--ink);
+}
+.data-note{
+  font-size:14px;
+  line-height:1.55;
+  color:var(--ink-soft);
+  margin-top:18px;
+  padding-top:18px;
+  border-top:1px solid var(--line);
+}
+.data-note b{color:var(--accent)}
+
+/* ============================================================
    RESPONSIVE
    ============================================================ */
 @media (max-width: 860px){
@@ -1023,6 +1075,8 @@ input,textarea{font:inherit}
   .pitch-stage{padding:28px 22px}
   .section-title h2{font-size:30px}
   .view-header-left h1{font-size:38px}
+  .data-panel{grid-template-columns:1fr}
+  .data-info,.data-actions{padding:22px}
 }
 
 /* ============================================================
@@ -1881,30 +1935,99 @@ const STATE = {
 };
 
 /* ============================================================
-   PERSISTENCE (localStorage fallback — works offline)
+   PERSISTENCE (localStorage + export/import to JSON file)
    ============================================================ */
 const STORE_KEY = 'sales_academy_v1';
+
 function saveState(){
   try{
     const toSave = {
+      version: 1,
+      savedAt: new Date().toISOString(),
       xp: STATE.xp, streak: STATE.streak, lastPlayed: STATE.lastPlayed,
       cardStats: STATE.cardStats, catStats: STATE.catStats,
     };
     localStorage.setItem(STORE_KEY, JSON.stringify(toSave));
-  }catch(e){}
+    STATE.lastSavedAt = toSave.savedAt;
+  }catch(e){
+    // localStorage may be disabled (private mode, strict file:// policy)
+    // — fall through silently; user can export manually
+  }
 }
+
 function loadState(){
   try{
     const raw = localStorage.getItem(STORE_KEY);
-    if(!raw) return;
+    if(!raw) return false;
     const data = JSON.parse(raw);
-    STATE.xp = data.xp || 0;
-    STATE.streak = data.streak || 0;
-    STATE.lastPlayed = data.lastPlayed || null;
-    STATE.cardStats = data.cardStats || {};
-    STATE.catStats = data.catStats || {};
-  }catch(e){}
+    applyStateData(data);
+    return true;
+  }catch(e){ return false; }
 }
+
+function applyStateData(data){
+  STATE.xp = data.xp || 0;
+  STATE.streak = data.streak || 0;
+  STATE.lastPlayed = data.lastPlayed || null;
+  STATE.cardStats = data.cardStats || {};
+  STATE.catStats = data.catStats || {};
+  STATE.lastSavedAt = data.savedAt || null;
+}
+
+function exportProgress(){
+  const data = {
+    version: 1,
+    savedAt: new Date().toISOString(),
+    xp: STATE.xp,
+    streak: STATE.streak,
+    lastPlayed: STATE.lastPlayed,
+    cardStats: STATE.cardStats,
+    catStats: STATE.catStats,
+  };
+  const json = JSON.stringify(data, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const today = new Date().toISOString().slice(0,10);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `sales-academy-progress-${today}.json`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+  showXPPop('Progress exported ✓');
+}
+
+function importProgress(file){
+  const reader = new FileReader();
+  reader.onload = (e)=>{
+    try{
+      const data = JSON.parse(e.target.result);
+      if(typeof data.xp !== 'number'){
+        alert('That file doesn\u2019t look like a valid progress backup.');
+        return;
+      }
+      applyStateData(data);
+      saveState();
+      renderStats();
+      render();
+      showXPPop(`Progress restored · ${data.xp} XP`);
+    }catch(err){
+      alert('Couldn\u2019t read that file. Make sure it\u2019s a progress JSON exported from this app.');
+    }
+  };
+  reader.onerror = ()=> alert('Failed to read the file.');
+  reader.readAsText(file);
+}
+
+// Save aggressively whenever the page/tab is about to go away.
+// Some browsers treat local files as "unique origins" and drop
+// localStorage on close — these hooks + the Export button cover that.
+window.addEventListener('pagehide', saveState);
+window.addEventListener('beforeunload', saveState);
+window.addEventListener('visibilitychange', ()=>{
+  if(document.visibilityState === 'hidden') saveState();
+});
 
 function updateStreak(){
   const today = new Date().toDateString();
@@ -2089,6 +2212,26 @@ function renderHome(main){
         `;
       }).join('')}
     </div>
+
+    <div class="section-title">
+      <div class="num">§ 03</div>
+      <h2>Your progress</h2>
+      <hr/>
+    </div>
+    <div class="data-panel">
+      <div class="data-info">
+        <div class="data-row"><span class="data-label">XP</span><span class="data-value">${STATE.xp}</span></div>
+        <div class="data-row"><span class="data-label">Streak</span><span class="data-value">${STATE.streak} day${STATE.streak===1?'':'s'}</span></div>
+        <div class="data-row"><span class="data-label">Last saved</span><span class="data-value">${STATE.lastSavedAt ? new Date(STATE.lastSavedAt).toLocaleString() : '—'}</span></div>
+        <p class="data-note">Your progress auto-saves in this browser. If you ever clear cookies, use a different device, or your browser resets local data on file:// pages — <b>export a backup</b> and keep the JSON file safe. Importing it later restores everything.</p>
+      </div>
+      <div class="data-actions">
+        <button class="btn primary" id="exportBtn">↓ Export progress</button>
+        <button class="btn" id="importBtn">↑ Import progress</button>
+        <input type="file" id="importFile" accept="application/json,.json" style="display:none" />
+        <button class="btn ghost" id="resetBtn">Reset all progress</button>
+      </div>
+    </div>
   `;
 
   // wire up
@@ -2105,6 +2248,30 @@ function renderHome(main){
   });
   main.querySelectorAll('.cat-tile').forEach(tile=>{
     tile.addEventListener('click', ()=> startQuiz(tile.dataset.cat, 10));
+  });
+  // progress panel
+  const exportBtn = main.querySelector('#exportBtn');
+  const importBtn = main.querySelector('#importBtn');
+  const importFile = main.querySelector('#importFile');
+  const resetBtn = main.querySelector('#resetBtn');
+  if(exportBtn) exportBtn.addEventListener('click', exportProgress);
+  if(importBtn) importBtn.addEventListener('click', ()=>importFile.click());
+  if(importFile) importFile.addEventListener('change', (e)=>{
+    const f = e.target.files && e.target.files[0];
+    if(f) importProgress(f);
+    e.target.value = '';
+  });
+  if(resetBtn) resetBtn.addEventListener('click', ()=>{
+    if(confirm('Reset all progress? This erases your XP, streak, and category stats. (You can export a backup first.)')){
+      STATE.xp = 0;
+      STATE.streak = 0;
+      STATE.lastPlayed = null;
+      STATE.cardStats = {};
+      STATE.catStats = {};
+      saveState();
+      renderStats();
+      render();
+    }
   });
 }
 
